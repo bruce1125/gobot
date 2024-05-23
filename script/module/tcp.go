@@ -5,12 +5,15 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"strconv"
+	"reflect"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
+	"github.com/pojol/gobot/script/pb"
 	lua "github.com/yuin/gopher-lua"
+	luar "layeh.com/gopher-luar"
 )
 
 type TCPModule struct {
@@ -27,6 +30,8 @@ type TCPModule struct {
 }
 
 type byteQueue []byte
+
+var byteOrder = binary.BigEndian
 
 // 入队
 func (q *byteQueue) push(b []byte) {
@@ -50,16 +55,16 @@ func (q *byteQueue) pop(maxLen int) ([]byte, bool) {
 
 // 队列当前长度
 func (q *byteQueue) haveFull() bool {
-	if len(*q) < 2 {
+	if len(*q) < 4 {
 		return false
 	}
 
-	var header [2]byte
-	copy(header[:], (*q)[:2])
+	var header [4]byte
+	copy(header[:], (*q)[:4])
 
-	var msgleni int16
-	binary.Read(bytes.NewBuffer(header[:]), binary.LittleEndian, &msgleni)
-	if len(*q) < int(msgleni) {
+	var msgleni int32
+	binary.Read(bytes.NewBuffer(header[1:]), byteOrder, &msgleni)
+	if len(*q) < 4+int(msgleni) {
 		return false
 	}
 
@@ -113,6 +118,7 @@ func (t *TCPModule) _dail(host string, port string) error {
 
 	f, _ := t.conn.File()
 	t.fd = int(f.Fd())
+	t.done = make(chan struct{}, 1)
 
 	go t._read()
 	return nil
@@ -164,6 +170,7 @@ func (t *TCPModule) _read() {
 			n, err := t.conn.Read(buf)
 			if err != nil {
 				fmt.Printf("syscall.read fd %v size %v err %v\n", t.fd, n, err.Error())
+				return
 			}
 
 			if n != 0 {
@@ -176,83 +183,79 @@ func (t *TCPModule) _read() {
 
 }
 
-func readret(L *lua.LState, ty, custom, id int, body []byte, err string) int {
+func readret(L *lua.LState, ty int, id string, body proto.Message, err string) int {
 
 	L.Push(lua.LNumber(ty))
-	L.Push(lua.LNumber(custom))
-	L.Push(lua.LNumber(id))
-	L.Push(lua.LString(body))
+	L.Push(lua.LString(id))
+	L.Push(luar.New(L, body))
 	L.Push(lua.LString(err))
 
-	return 5
+	return 4
 }
 
 func (t *TCPModule) read_msg(L *lua.LState) int {
 
-	msglen := L.ToInt(1)
-	msgty := L.ToInt(2)
-	msgcustom := L.ToInt(3)
-	msgid := L.ToInt(4)
-
-	msgleni := int16(0)
 	msgtyi := int8(0)
-	msgcustomi := int16(0)
-	msgidi := int16(0)
 
 	var msgbody []byte
 
 	t.bufMu.Lock()
 	if !t.buf.haveFull() {
 		t.bufMu.Unlock()
-		return readret(L, 0, 0, 0, []byte{}, "nodata")
+		return readret(L, 0, "", nil, "nodata")
 	}
 
-	msglenb, _ := t.buf.pop(msglen)
-	binary.Read(bytes.NewBuffer(msglenb), binary.LittleEndian, &msgleni)
+	msgtyb, _ := t.buf.pop(1)
 
-	msgtyb, _ := t.buf.pop(msgty)
-	binary.Read(bytes.NewBuffer(msgtyb), binary.LittleEndian, &msgtyi)
+	binary.Read(bytes.NewBuffer(msgtyb), byteOrder, &msgtyi)
 
-	msgcustomb, _ := t.buf.pop(msgcustom)
-	binary.Read(bytes.NewBuffer(msgcustomb), binary.LittleEndian, &msgcustomi)
+	msglenb, _ := t.buf.pop(3)
+	msgleni := BytesToInt(msglenb)
 
-	msgidb, _ := t.buf.pop(msgid)
-	binary.Read(bytes.NewBuffer(msgidb), binary.LittleEndian, &msgidi)
-
-	msgbody, _ = t.buf.pop(int(msgleni) - (msgty + msgcustom + msgid))
-
+	msgbody, _ = t.buf.pop(msgleni)
 	t.bufMu.Unlock()
 
+	ccgMsg := pb.TcgMsg{}
+	proto.Unmarshal(msgbody, &ccgMsg)
+
+	var body proto.Message
+	msgType := proto.MessageType(ccgMsg.LogicType)
+	tptr := reflect.New(msgType.Elem())
+	body = tptr.Interface().(proto.Message)
+	proto.Unmarshal(ccgMsg.LogicData, body)
 	info := Report{
-		Api:     strconv.Itoa(int(msgidi)),
+		Api:     ccgMsg.LogicType,
 		ResBody: int(msgleni),
 		Consume: int(time.Since(t.writeTime).Milliseconds()),
 	}
 	t.repolst = append(t.repolst, info)
 
-	return readret(L, int(msgtyi), int(msgcustomi), int(msgidi), msgbody, "")
+	return readret(L, int(msgtyi), ccgMsg.LogicType, body, "")
 }
 
 func (t *TCPModule) write_msg(L *lua.LState) int {
 
-	msglen := L.ToInt(1)
-	msgty := L.ToInt(2)
-	msgcustom := L.ToInt(3)
-	msgid := L.ToInt(4)
-	msgbody := L.ToString(5)
+	msgid := L.ToString(1)
+	msgbody := L.ToString(2)
 
 	if t.conn == nil {
 		L.Push(lua.LString("not connected"))
 		return 1
 	}
 
-	buf := bytes.NewBuffer(make([]byte, 0, msglen))
+	ccg := &pb.TcgMsg{
+		LogicType: msgid,
+		LogicData: []byte(msgbody),
+	}
 
-	binary.Write(buf, binary.LittleEndian, uint16(msglen))
-	binary.Write(buf, binary.LittleEndian, uint8(msgty))
-	binary.Write(buf, binary.LittleEndian, uint16(msgcustom))
-	binary.Write(buf, binary.LittleEndian, uint16(msgid))
-	buf.WriteString(msgbody)
+	data, _ := proto.Marshal(ccg)
+
+	buf := bytes.NewBuffer(make([]byte, 0, 4+len(data)))
+
+	// binary.Write(buf, byteOrder, uint8(4))
+	buf.WriteByte(0x04)
+	binary.Write(buf, byteOrder, IntToBytes(len(data)))
+	buf.WriteString(string(data))
 
 	t.writeTime = time.Now()
 
@@ -306,4 +309,22 @@ func (t *TCPModule) GetReport() []Report {
 	t.repolst = t.repolst[:0]
 
 	return rep
+}
+
+// BytesToInt decode packet data length byte to int(Big end)
+func BytesToInt(b []byte) int {
+	result := 0
+	for _, v := range b {
+		result = result<<8 + int(v)
+	}
+	return result
+}
+
+// IntToBytes encode packet data length to bytes(Big end)
+func IntToBytes(n int) []byte {
+	buf := make([]byte, 3)
+	buf[0] = byte((n >> 16) & 0xFF)
+	buf[1] = byte((n >> 8) & 0xFF)
+	buf[2] = byte(n & 0xFF)
+	return buf
 }

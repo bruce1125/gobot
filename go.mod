@@ -15,6 +15,7 @@ require (
 	github.com/stretchr/testify v1.7.0
 	github.com/yuin/gopher-lua v0.0.0-20210529063254-f4c35e4016d9
 	golang.org/x/crypto v0.0.0-20210817164053-32db794688a5 // indirect
+	google.golang.org/protobuf v1.31.0
 	gorm.io/driver/mysql v1.4.7
 	gorm.io/gorm v1.24.5
 )
@@ -36,6 +37,7 @@ require (
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.9.5 // indirect
+	github.com/modern-go/reflect2 v1.0.2
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230126093431-47fa9a501578 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
@@ -50,6 +52,7 @@ require (
 	golang.org/x/text v0.3.6 // indirect
 	golang.org/x/time v0.0.0-20201208040808-7e3f01d25324 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
+	layeh.com/gopher-luar v1.0.11
 	modernc.org/libc v1.22.2 // indirect
 	modernc.org/mathutil v1.5.0 // indirect
 	modernc.org/memory v1.5.0 // indirect

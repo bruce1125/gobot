@@ -56,7 +56,8 @@ func Init(NoDBMode bool) (*Cache, error) {
 	var err error
 
 	if NoDBMode {
-		sqlptr, err = gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+		// sqlptr, err = gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+		sqlptr, err = gorm.Open(sqlite.Open("gobot.db"), &gorm.Config{})
 	} else {
 		pwd := os.Getenv("MYSQL_PASSWORD")
 		if pwd == "" {
